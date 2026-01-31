@@ -1,14 +1,16 @@
-# LinkedIn post template (local use only)
-LINKEDIN_POST.md
+# Personal and draft files
+drafts/
+personal/
+*.draft
 
-# System files
-.DS_Store
-Thumbs.db
-
-# Editor files
+# IDE and editor files
 .vscode/
 *.swp
 *.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
 
 # Temporary files
 *.tmp
