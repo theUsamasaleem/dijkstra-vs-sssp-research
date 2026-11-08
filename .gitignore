@@ -15,3 +15,11 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+benchmark/bench
+paper/*.aux
+paper/*.log
+paper/*.bbl
+paper/*.blg
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.out

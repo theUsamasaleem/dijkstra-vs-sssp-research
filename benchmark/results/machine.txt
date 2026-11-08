@@ -1,0 +1,3 @@
+CPU(s):                                  8
+Model name:                              11th Gen Intel(R) Core(TM) i5-1145G7 @ 2.60GHz
+g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0

@@ -1,0 +1,374 @@
+\documentclass[conference]{IEEEtran}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{graphicx}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{cleveref}
+
+\begin{document}
+
+\title{Dijkstra's Algorithm versus Label-Correcting\\Shortest-Path Methods in Practice:\\A Reproducible Empirical Study}
+
+\author{\IEEEauthorblockN{Usama Saleem}
+\IEEEauthorblockA{Department of Computer Science\\
+National University of Computer and Emerging Sciences (FAST-NUCES)\\
+Karachi, Pakistan\\
+usamathesaleem@gmail.com}}
+
+\maketitle
+
+\begin{abstract}
+Dijkstra's algorithm is the default choice for single-source shortest paths
+(SSSP) with non-negative weights, yet practitioners often hear conflicting
+claims: that queue-based Bellman--Ford (SPFA) is ``faster on average'', that
+Fibonacci-type heaps speed Dijkstra up, or that A* always beats Dijkstra. We
+report a reproducible empirical study of six SSSP implementations (Dijkstra with
+binary, pairing, thin and array priority queues; Bellman--Ford; SPFA) on four
+synthetic graph families from $10^4$ to $10^6$ vertices, together with a density
+sweep and a point-to-point A* study. All of the more than $1{,}300$ runs were verified against a
+reference solution. On low-diameter random and scale-free graphs, the
+label-correcting methods were \emph{faster} in wall-clock time than Dijkstra
+(up to $2.5\times$ at $10^5$ vertices) despite performing $2$--$16\times$ more
+edge relaxations. On 2-D grids, SPFA's work grew super-linearly and Dijkstra was
+$8\times$ faster than SPFA and $22\times$ faster than Bellman--Ford at $10^6$
+vertices. A simple lazy-deletion binary heap beat pairing and thin heaps with
+\textsc{decrease-key} in every scaling experiment, by $1.3$--$2.5\times$. A*'s
+speed-up over Dijkstra ranged from none to $5.8\times$ depending only on how
+tight its heuristic was. We release the code and data and derive practical
+guidelines for choosing an algorithm.
+\end{abstract}
+
+\begin{IEEEkeywords}
+single-source shortest paths, Dijkstra's algorithm, Bellman--Ford, SPFA, A* search, priority queues, algorithm engineering, empirical evaluation
+\end{IEEEkeywords}
+
+%% ------------------------------------------------------------------
+\section{Introduction}
+
+The single-source shortest path (SSSP) problem asks for the minimum-weight
+path from a source vertex $s$ to every other vertex of a weighted directed graph
+$G=(V,E,w)$, with $n=|V|$ and $m=|E|$. It underlies route planning, network
+routing, logistics and many graph-analytics pipelines. For non-negative weights,
+Dijkstra's algorithm~\cite{dijkstra1959} with a Fibonacci heap runs in
+$O(m + n\log n)$ time~\cite{fredman1987}; label-correcting methods such as
+Bellman--Ford~\cite{bellman1958,ford1956,moore1959} and its queue-based variant
+SPFA~\cite{duan1994spfa} run in $O(nm)$ worst-case time but also handle negative
+weights.
+
+Asymptotic bounds are a poor guide to practical algorithm selection. Constant
+factors, cache behaviour and graph structure frequently dominate, and folklore
+claims such as ``SPFA is fast on average'' or ``Fibonacci heaps make Dijkstra
+faster'' are often repeated without reproducible evidence. The question has also
+gained new attention: Duan et al.~\cite{duan2025} recently gave a deterministic
+$O(m\log^{2/3} n)$ algorithm for directed SSSP, the first to beat Dijkstra's
+$O(m + n\log n)$ bound on sparse graphs in the comparison--addition model, and
+Haeupler et al.~\cite{haeupler2024} showed that Dijkstra with a suitable heap is
+universally optimal for the ordering problem. These are theoretical results,
+which makes careful measurement of the classical baselines especially timely.
+
+This paper presents a reproducible empirical comparison of the classical
+algorithms. Our contributions are:
+\begin{itemize}
+  \item An open-source C++ benchmark that implements six SSSP variants:
+        Dijkstra with a binary heap, a pairing heap, a thin heap (a Fibonacci-heap
+        relative) and an unsorted array, plus Bellman--Ford and SPFA. A separate
+        point-to-point study compares Dijkstra with A*~\cite{hart1968}.
+  \item An evaluation on four graph families (random sparse, 2-D grid,
+        scale-free and random dense) from $10^4$ to $10^6$ vertices, plus a
+        density sweep at fixed $n$. Every output is verified against a
+        reference solution.
+  \item Machine-independent work measures (edge relaxations and priority-queue
+        operations) reported alongside wall-clock time, so the conclusions can
+        be checked on other hardware.
+  \item Evidence-based guidelines for choosing an algorithm, including cases
+        where common folklore does not hold.
+\end{itemize}
+
+%% ------------------------------------------------------------------
+\section{Background and Related Work}
+
+\textbf{Label-setting vs.\ label-correcting.} Dijkstra's algorithm settles
+vertices in non-decreasing distance order. With non-negative weights, each
+vertex is scanned once. Its running time depends on the priority queue:
+$O(n^2)$ with an array, $O(m\log n)$ with a binary heap and
+$O(m+n\log n)$ with a Fibonacci heap~\cite{fredman1987}. Pairing
+heaps~\cite{fredman1986pairing} and thin heaps~\cite{kaplan2008thin} are
+practical alternatives that support efficient \textsc{decrease-key}.
+Label-correcting algorithms may scan a vertex many times. Bellman--Ford performs
+up to $n-1$ passes over all edges. SPFA keeps a FIFO queue of vertices whose
+labels changed. Its worst case is still $\Theta(nm)$, but it is widely reported
+to be fast on random inputs.
+
+\textbf{Experimental studies.} Cherkassky, Goldberg and
+Radzik~\cite{cherkassky1996} published the classic experimental evaluation of
+shortest-path codes, and Zhan and Noon~\cite{zhan1998} evaluated them on road
+networks. The 9th DIMACS Implementation Challenge~\cite{dimacs2009} established
+common benchmarks. Larkin, Sen and Tarjan~\cite{larkin2014} found that simple
+heaps often beat theoretically superior ones in practice. For road networks,
+speed-up techniques such as A* with landmarks~\cite{goldberg2005} and
+contraction hierarchies~\cite{geisberger2008} dominate. These rely on
+preprocessing and are outside the scope of this study.
+
+\textbf{Theory.} Thorup~\cite{thorup1999} solved undirected SSSP with integer
+weights in linear time in the word-RAM model. Duan et al.~\cite{duan2025} broke
+the sorting barrier for directed graphs with real weights. To our knowledge,
+practical implementations of~\cite{duan2025} are still at an early stage. We
+treat it as a theoretical reference point and leave its benchmarking to future
+work (\cref{sec:limits}).
+
+%% ------------------------------------------------------------------
+\section{Algorithms and Implementation}
+
+All algorithms are implemented in a single C++17 file (about 300 lines) and share
+a compressed sparse row (CSR) graph representation with 32-bit vertex ids and
+64-bit distances. \Cref{tab:algos} lists the variants.
+
+\begin{table}[t]
+\centering
+\caption{Implemented algorithms and worst-case time bounds.}
+\label{tab:algos}
+\footnotesize
+\begin{tabular}{lll}
+\toprule
+Label & Algorithm / priority queue & Worst case \\
+\midrule
+Dij-BH  & Dijkstra, binary heap, lazy deletion & $O(m\log n)$ \\
+Dij-PH  & Dijkstra, pairing heap + decrease-key & $O(m\log n)$\textsuperscript{a} \\
+Dij-TH  & Dijkstra, thin heap + decrease-key & $O(m + n\log n)$ \\
+Dij-Arr & Dijkstra, unsorted array & $O(n^2 + m)$ \\
+BF      & Bellman--Ford, early termination & $O(nm)$ \\
+SPFA    & Queue-based Bellman--Ford & $O(nm)$ \\
+A*      & A*, Manhattan heuristic (grids only) & $O(m\log n)$ \\
+\bottomrule
+\multicolumn{3}{l}{\scriptsize \textsuperscript{a}Amortized; the exact decrease-key bound of pairing heaps is open.}
+\end{tabular}
+\end{table}
+
+Dij-BH uses \texttt{std::priority\_queue} and skips stale entries instead of
+performing \textsc{decrease-key}. This is the variant most programmers write.
+Dij-PH and Dij-TH use the GNU \texttt{pb\_ds} pairing and thin heaps with
+explicit \textsc{decrease-key}. Bellman--Ford stops after the first pass with no
+improvement. A* uses the Manhattan distance multiplied by the minimum edge weight
+$w_{\min}$. This heuristic is admissible and consistent, so A* returns exact
+distances.
+
+%% ------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:setup}
+
+\textbf{Graph families.} All graphs are directed with integer weights drawn
+uniformly from $[1,1000]$.
+(i)~\emph{Random sparse}: a Hamiltonian cycle (which guarantees strong
+connectivity) plus $4n$ uniformly random arcs, so $m\approx 5n$.
+(ii)~\emph{2-D grid}: $\sqrt n\times\sqrt n$ lattice with 4-neighbour
+bidirectional arcs; it has large diameter and resembles road networks.
+(iii)~\emph{Scale-free}: Barab\'asi--Albert preferential
+attachment~\cite{barabasi1999} with 3 edges per new vertex, made symmetric.
+It has small diameter and heavy-tailed degrees.
+(iv)~\emph{Random dense}: a Hamiltonian cycle plus each arc $(u,v)$
+independently with probability $p$. The scaling experiments use $p=0.5$, and a
+separate sweep varies $p\in\{1,2,5,10,25,50,100\}\%$ at $n=2000$.
+
+\textbf{Protocol.} Each configuration uses one graph (seed 42) and 10 random
+sources, and we report the median and inter-quartile range over sources. Every
+algorithm's distance array is compared element-by-element with Dij-BH, and a
+mismatch aborts the run. No mismatches occurred. Runs that exceed 30\,s are
+recorded as timeouts (T/O), and that algorithm is skipped for the remaining
+sources of the same graph. Dij-Arr is run only for $n\le 20{,}000$.
+For the point-to-point study we use the $1000\times1000$ grid with weights
+drawn from $U[w_{\min},1000]$ for $w_{\min}\in\{1,100,250,500,750,900\}$, draw 20
+random $(s,t)$ pairs per setting, and stop both Dijkstra and A* when $t$ is
+settled.
+
+\textbf{Platform.} Intel Core i5-1145G7 laptop CPU (4 cores, 2.6\,GHz base), 23\,GB RAM,
+Ubuntu 22.04, GCC 11.4 with \texttt{-O2 -march=native}. All runs are
+single-threaded.
+Timings include only the SSSP computation, not graph generation. The code, raw
+CSV and analysis scripts are publicly available (\cref{sec:repro}).
+
+%% ------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\begin{table*}[t]
+\centering
+\caption{Median SSSP time in milliseconds over 10 sources (lower is better; best per row in bold). T/O: timeout; --: not run ($n>20{,}000$ for Dij-Arr).}
+\label{tab:main}
+\footnotesize
+\input{generated/table_main.tex}
+\end{table*}
+
+\begin{figure*}[t]
+\centering
+\begin{tabular}{ccc}
+\input{generated/fig_sparse.tex} &
+\input{generated/fig_grid.tex} &
+\input{generated/fig_scalefree.tex} \\
+(a) Random sparse ($m\approx5n$) & (b) 2-D grid & (c) Scale-free (BA, $k=3$)
+\end{tabular}
+\caption{Median running time versus number of vertices (log--log). The label-correcting methods (BF, SPFA) beat Dijkstra on low-diameter graphs (a, c) but scale badly on grids (b).}
+\label{fig:scaling}
+\end{figure*}
+
+\Cref{tab:main} reports median running times and \cref{fig:scaling} shows
+scaling. \Cref{tab:relax} reports the number of edge relaxations per arc, a
+hardware-independent measure of work. Dijkstra scans every reachable arc exactly
+once, so its value is always $1.00$.
+
+\begin{table}[t]
+\centering
+\caption{Mean edge relaxations per arc (machine-independent work).}
+\label{tab:relax}
+\footnotesize
+\input{generated/table_relax.tex}
+\end{table}
+
+\subsection{Low-diameter graphs: label-correcting methods win in practice}
+On random sparse and scale-free graphs, SPFA or Bellman--Ford was the fastest
+algorithm at every size. At $10^5$ vertices, Bellman--Ford was $1.7\times$
+(sparse) and $2.5\times$ (scale-free) faster than the binary-heap Dijkstra
+(Dij-BH). At $10^6$ vertices, the fastest label-correcting method was still
+$1.16\times$ (sparse, SPFA) and $1.37\times$ (scale-free, Bellman--Ford)
+faster. This
+happened even though they did more work. SPFA relaxed each arc $2.3$--$3.3$
+times on average and Bellman--Ford $10$--$16$ times
+(\cref{tab:relax}). Their work grew only slowly with $n$, which is consistent
+with the logarithmic diameter of these graphs. We attribute the wall-clock
+advantage to memory behaviour. A Bellman--Ford pass streams through the CSR
+arrays sequentially, while each heap operation in Dijkstra touches
+$O(\log n)$ scattered memory locations. We did not measure cache misses
+directly, so this explanation is a hypothesis.
+
+\subsection{High-diameter graphs: Dijkstra wins decisively}
+Grids reverse the picture. SPFA's relaxations per arc grew from $4.4$ at
+$n=10^4$ to $13.7$ at $10^5$ and $41.6$ at $10^6$. Bellman--Ford's grew from
+$68$ to $222$ to $735$, because the number of passes tracks the graph diameter
+($\Theta(\sqrt n)$ on grids). At $10^6$ vertices Dij-BH took 257\,ms, against
+2.05\,s for SPFA ($8.0\times$) and 5.75\,s for Bellman--Ford ($22\times$).
+SPFA was marginally faster only on the smallest grid. Because SPFA has no
+useful worst-case guarantee and degrades badly on grid- and road-like
+structure, it is a risky default.
+
+\subsection{Priority queues: simple beats sophisticated}
+The lazy-deletion binary heap was the fastest heap-based Dijkstra variant in
+every configuration of \cref{tab:main}. Pairing heaps (Dij-PH) were
+$1.3$--$2.5\times$ slower and thin heaps (Dij-TH) $1.6$--$2.5\times$ slower,
+even though they perform fewer heap operations, since each vertex is inserted
+only once. The only exception was the sparsest end of the density sweep
+($p\le2\%$), where the pairing heap matched the binary heap to within
+$3\%$. The theoretical
+$O(m + n\log n)$ advantage of Fibonacci-type heaps did not appear at any size
+we tested. This agrees with Larkin et al.~\cite{larkin2014}.
+
+\subsection{Density}
+\begin{figure}[t]
+\centering
+\resizebox{\columnwidth}{!}{\input{generated/fig_density.tex}}
+\caption{Effect of edge density at fixed $n=2000$ (median time, log scale).}
+\label{fig:density}
+\end{figure}
+\Cref{fig:density} varies the edge probability at $n=2000$. At $p\le 2\%$
+(average degree $\le 40$), SPFA was fastest, at $0.34$\,ms versus $0.60$\,ms
+for Dij-BH at $p=1\%$. The two were roughly tied at $p=5\%$, and from
+$p=10\%$ upwards Dij-BH was the fastest heap-based method. At $p=50\%$ it was
+$2.1\times$ faster than SPFA and $2.4\times$ faster than Bellman--Ford. The
+$O(n^2)$ array version of Dijkstra became competitive as the graph approached
+completeness. At $p=100\%$ it took 6.56\,ms against 6.84\,ms for Dij-BH,
+confirming the textbook advice that the array variant suits dense graphs.
+
+\subsection{Point-to-point queries: A* depends on heuristic quality}
+\begin{table}[t]
+\centering
+\caption{Point-to-point queries on a $1000\times1000$ grid with weights $U[w_{\min},1000]$ and heuristic $w_{\min}\cdot$Manhattan distance (20 random pairs each).}
+\label{tab:astar}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\input{generated/table_astar.tex}
+\end{table}
+For $s$--$t$ queries on the $10^6$-vertex grid, we varied the minimum edge
+weight $w_{\min}$. The Manhattan heuristic is scaled by $w_{\min}$, so a larger
+$w_{\min}$ gives a tighter lower bound (\cref{tab:astar}). With $w_{\min}=1$
+and weights averaging about $500$, the heuristic carries almost no information
+and A* scans as many arcs as Dijkstra, with no speed-up. As $w_{\min}$ grows,
+the scanned arcs fall from $2.18$ million to $0.48$ million and the speed-up
+rises to $5.8\times$. A* is therefore not inherently faster. Its benefit is
+determined entirely by how tight the heuristic is.
+
+%% ------------------------------------------------------------------
+\section{Discussion and Practical Guidelines}
+
+Our measurements support the following guidelines for non-negative weights.
+\begin{enumerate}
+  \item \textbf{Use Dijkstra with a lazy binary heap as the default.} It was
+        never far from the best (at most $2.5\times$ slower, on the
+        $10^5$-vertex scale-free graph), it was the clear winner on high-diameter and dense
+        graphs, and its $O(m\log n)$ bound protects against bad inputs.
+  \item \textbf{Do not reach for Fibonacci-type heaps.} Pairing and thin heaps
+        with \textsc{decrease-key} were consistently slower in our tests.
+  \item \textbf{SPFA/Bellman--Ford can be faster on low-diameter graphs}, such
+        as random or social-network-like graphs, by up to $2.5\times$ in our
+        experiments. They become dangerous on grid- or road-like graphs, where
+        their work grows super-linearly. Use them only when the structure is
+        known or negative weights force the choice.
+  \item \textbf{For very dense graphs ($p\to1$), the $O(n^2)$ array version is
+        competitive} and simpler.
+  \item \textbf{For point-to-point queries, invest in the heuristic.} A* with a
+        weak lower bound is just Dijkstra with overhead. With a tight bound it
+        gave up to $5.8\times$ in our tests. Landmark-based
+        heuristics~\cite{goldberg2005} or preprocessing such as contraction
+        hierarchies~\cite{geisberger2008} are the next step.
+\end{enumerate}
+These findings also qualify a common claim. The relative performance of
+Dijkstra and label-correcting methods is not a fixed percentage. It depends
+strongly on graph diameter and density, and can reverse direction between
+graph families of the same size.
+
+%% ------------------------------------------------------------------
+\section{Threats to Validity and Limitations}
+\label{sec:limits}
+
+\emph{Single platform.} All timings come from one laptop CPU. Absolute numbers
+will differ on other hardware, which is why we also report relaxation counts.
+\emph{Synthetic graphs.} We use generated graphs with uniform integer weights.
+Real road networks (e.g.\ DIMACS~\cite{dimacs2009}) have correlated weights and
+geometric structure that may favour A* and hurt SPFA more than our grids do.
+\emph{Non-negative weights only.} Dijkstra does not apply to negative weights,
+so the main advantage of Bellman--Ford/SPFA is not exercised. We compare the
+algorithms on the instances where all of them are correct.
+\emph{Implementation choices.} Library heaps (\texttt{pb\_ds}) may not be the
+fastest available implementations of their data structures. Radix heaps, Dial's
+buckets and $\Delta$-stepping were not included.
+\emph{Recent theory.} We did not implement the algorithm of
+Duan et al.~\cite{duan2025}. A faithful, tuned implementation and its comparison
+with the baselines here is the natural next step.
+
+%% ------------------------------------------------------------------
+\section{Conclusion}
+
+We presented a reproducible comparison of Dijkstra's algorithm with
+label-correcting SSSP methods on four graph families up to $10^6$ vertices. No
+single algorithm dominated. Label-correcting methods were faster on
+low-diameter graphs despite doing more work. Dijkstra was far more robust,
+winning by up to $22\times$ on grids. A plain binary heap beat theoretically
+superior heaps, and A*'s benefit depended entirely on its heuristic. Future
+work includes real road networks from the DIMACS challenge, hardware-counter
+measurements to test the cache hypothesis, negative-weight instances, parallel
+methods such as $\Delta$-stepping, and a tuned implementation of the
+sorting-barrier-breaking algorithm of Duan et al.~\cite{duan2025} to test
+whether its asymptotic gains appear in practice.
+
+\section*{Reproducibility}
+\label{sec:repro}
+Source code, raw measurements (\texttt{results/raw.csv}), the aggregation script
+and the scripts that generate every table and figure in this paper are available
+at \url{https://github.com/theUsamasaleem/sssp-empirical-study}. The
+command \texttt{./run\_all.sh \&\& python3 analyze.py} regenerates all results.
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}
